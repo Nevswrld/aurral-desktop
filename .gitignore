@@ -1,0 +1,10 @@
+/target
+*.log
+.env
+.env.*
+aurral-desktop.config.json
+*.exe
+*.msi
+*.pdb
+Thumbs.db
+.DS_Store

@@ -1,0 +1,22 @@
+[package]
+name = "aurral-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "Desktop client for Aurral music servers"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+directories = "5"
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tao = "0.38.0"
+ureq = { version = "3.5.2", default-features = false, features = ["rustls"] }
+url = "2"
+wry = "0.58.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
