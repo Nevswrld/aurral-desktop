@@ -165,10 +165,10 @@ jobs:
           TAG="${{ steps.meta.outputs.tag }}"
           sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
-          mkdir -p flatpak-build/src
-          cp "target/${{ matrix.target }}/release/aurral-desktop" flatpak-build/src/aurral-desktop
-          cp packaging/linux/org.aurral.Desktop.desktop flatpak-build/src/org.aurral.Desktop.desktop
-          cp assets/aurral-icon-512.png flatpak-build/src/aurral-icon-512.png
+          mkdir -p flatpak-build
+          cp "target/${{ matrix.target }}/release/aurral-desktop" flatpak-build/aurral-desktop
+          cp packaging/linux/org.aurral.Desktop.desktop flatpak-build/org.aurral.Desktop.desktop
+          cp assets/aurral-icon-512.png flatpak-build/aurral-icon-512.png
           cp packaging/linux/org.aurral.Desktop.yml flatpak-build/org.aurral.Desktop.yml
           pushd flatpak-build
           sudo flatpak-builder --disable-rofiles-fuse --force-clean --repo=repo build-dir org.aurral.Desktop.yml
