@@ -1,42 +1,50 @@
 # Aurral Desktop
 
-A lightweight Windows desktop client for [Aurral](https://github.com/lklynet/aurral), built in Rust.
+A lightweight desktop client for [Aurral](https://github.com/lklynet/aurral), built in Rust.
 
-This app is a thin WebView2 wrapper around your Aurral server's web frontend, so the desktop experience looks and behaves like the Aurral web app.
+This app is a thin native WebView wrapper around your Aurral server's web frontend, so the desktop experience looks and behaves like the Aurral web app. It supports Windows, Linux, and macOS.
 
 ## Features
 
-- Native Windows desktop window for Aurral
+- Native desktop window for Aurral
 - Connect to any Aurral server by URL
 - Saves your server URL locally for next launch
 - Uses the real Aurral web frontend for login, browsing, and playback
+- Windows installer, Linux tarball, and macOS app bundle via GitHub Releases
+
+## Download
+
+Prebuilt installers/packages are available on the [GitHub Releases](https://github.com/Nevswrld/aurral-desktop/releases) page:
+
+- **Windows**: `AurralDesktop-Setup-*.exe` (Inno Setup installer)
+- **Linux**: `AurralDesktop-*-linux-x64.tar.gz`
+- **macOS**: `AurralDesktop-*-macos-arm64.zip` (Apple Silicon `.app` bundle)
 
 ## Requirements
 
-- Windows 10/11
-- Microsoft Edge WebView2 Runtime (usually already installed on Windows 10/11)
 - A running Aurral server
+- **Windows**: Windows 10/11 with Microsoft Edge WebView2 Runtime
+- **Linux**: WebKitGTK and GTK3 (e.g. `libwebkit2gtk-4.1-dev`, `libgtk-3-dev` on Ubuntu/Debian)
+- **macOS**: macOS 11+ (Apple Silicon build provided by release workflow)
 - Rust stable toolchain for building from source
 
 ## Build
 
-```powershell
+```bash
 cargo build --release
 ```
 
 The executable will be created at:
 
 ```text
-target\release\aurral-desktop.exe
+target/release/aurral-desktop(.exe on Windows)
 ```
 
 ## Run
 
-```powershell
+```bash
 cargo run --release
 ```
-
-Or run the built `aurral-desktop.exe` directly.
 
 ## Usage
 
