@@ -20,3 +20,6 @@ wry = "0.58.1"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[build-dependencies]
+winresource = "0.1.34"
