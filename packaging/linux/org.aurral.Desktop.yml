@@ -1,4 +1,4 @@
-﻿app-id: org.aurral.Desktop
+app-id: org.aurral.Desktop
 runtime: org.freedesktop.Platform
 runtime-version: '24.08'
 sdk: org.freedesktop.Sdk
