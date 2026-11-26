@@ -12,6 +12,7 @@ This app is a thin native WebView wrapper around your Aurral server's web fronte
 - Connect to any Aurral server by URL
 - Saves your server URL locally for next launch
 - Uses the real Aurral web frontend for login, browsing, and playback
+- Discord Rich Presence showing your current Aurral track
 - Windows installer, Linux tarball, and macOS app bundle via GitHub Releases
 
 ## Download
@@ -57,9 +58,29 @@ cargo run --release
 
 The selected server URL is stored locally in your user config directory.
 
+## Discord Rich Presence
+
+The desktop app can show your current Aurral track in Discord. To enable it, set a Discord Application ID in your config file:
+
+- **Windows**: `%APPDATA%\aurral\AurralDesktop\config\config.json`
+- **Linux**: `~/.config/AurralDesktop/config.json`
+- **macOS**: `~/Library/Application Support/org.aurral.AurralDesktop/config.json`
+
+Add `discord_app_id` (from the [Discord Developer Portal](https://discord.com/developers/applications)):
+
+```json
+{
+  "server_url": "http://localhost:3001",
+  "discord_enabled": true,
+  "discord_app_id": "YOUR_DISCORD_APPLICATION_ID"
+}
+```
+
+You can also set the `AURRAL_DISCORD_APP_ID` environment variable. Discord must be running on the same machine.
+
 ## Notes
 
-- The desktop app renders the Aurral web frontend inside WebView2 for visual parity with the web app.
+- The desktop app renders the Aurral web frontend inside a native WebView for visual parity with the web app.
 - Authentication and playback are handled by Aurral's web frontend/server.
 - To change servers, clear the saved config in your user config directory or reinstall with a fresh config.
 

@@ -1,6 +1,7 @@
 ﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
+mod discord;
 
 use anyhow::Result;
 use config::{normalize_server_url, AppConfig};
@@ -44,12 +45,32 @@ fn main() -> Result<()> {
     let config = Arc::new(Mutex::new(AppConfig::load()));
     let initial_url = config.lock().ok().and_then(|c| c.normalized_server_url());
 
+    let discord = {
+        let c = config.lock().ok();
+        let enabled = c.as_ref().map(|c| c.discord_enabled).unwrap_or(true);
+        let app_id = c
+            .as_ref()
+            .map(|c| c.discord_app_id.trim().to_string())
+            .unwrap_or_default();
+        let app_id = if app_id.is_empty() {
+            std::env::var("AURRAL_DISCORD_APP_ID").unwrap_or_default()
+        } else {
+            app_id
+        };
+        if enabled {
+            discord::DiscordPresence::start(app_id)
+        } else {
+            None
+        }
+    };
+
     let handler_config = config.clone();
     let handler_proxy = proxy.clone();
+    let handler_discord = discord.clone();
     let mut builder = WebViewBuilder::new()
         .with_devtools(cfg!(debug_assertions))
         .with_autoplay(true)
-        .with_initialization_script(THEME_SCRIPT)
+        .with_initialization_script(format!("{}\n{}", THEME_SCRIPT, PRESENCE_SCRIPT))
         .with_ipc_handler(move |req| {
             let body = req.body().to_string();
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -93,6 +114,30 @@ fn main() -> Result<()> {
                         if let Some(color) = msg.get("color").and_then(|v| v.as_str()) {
                             if let Some(rgb) = parse_hex_color(color) {
                                 let _ = handler_proxy.send_event(UserEvent::Theme(rgb));
+                            }
+                        }
+                    }
+                    Some("presence") => {
+                        if let Some(p) = handler_discord.as_ref() {
+                            let playing = msg.get("playing").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let title = msg.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let artist = msg.get("artist").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let album = msg.get("album").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let artwork = msg.get("artwork").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                            let position_ms = msg.get("positionMs").and_then(|v| v.as_u64()).unwrap_or(0);
+                            let duration_ms = msg.get("durationMs").and_then(|v| v.as_u64()).unwrap_or(0);
+                            if playing && !title.is_empty() {
+                                p.update(discord::PresenceState {
+                                    playing,
+                                    title,
+                                    artist,
+                                    album,
+                                    artwork_url: artwork,
+                                    position_ms,
+                                    duration_ms,
+                                });
+                            } else {
+                                p.clear();
                             }
                         }
                     }
@@ -363,6 +408,43 @@ fn set_title_bar_color(hwnd: isize, rgb: [u8; 3]) {
     }
 }
 
+const PRESENCE_SCRIPT: &str = r#"
+(() => {
+  let last = '';
+  const send = (payload) => {
+    try {
+      const key = JSON.stringify(payload);
+      if (key === last) return;
+      last = key;
+      if (window.ipc) window.ipc.postMessage(JSON.stringify(payload));
+    } catch (_) {}
+  };
+  const read = () => {
+    try {
+      const ms = navigator.mediaSession;
+      const md = ms && ms.metadata;
+      const audio = document.querySelector('audio,video');
+      const playing = ms ? ms.playbackState === 'playing' : (audio ? !audio.paused : false);
+      const title = md?.title || '';
+      const artist = md?.artist || '';
+      const album = md?.album || '';
+      let artwork = '';
+      if (md?.artwork && md.artwork.length) artwork = md.artwork[md.artwork.length - 1]?.src || md.artwork[0]?.src || '';
+      const durationMs = audio && isFinite(audio.duration) ? Math.max(0, Math.round(audio.duration * 1000)) : 0;
+      const positionMs = audio && isFinite(audio.currentTime) ? Math.max(0, Math.round(audio.currentTime * 1000)) : 0;
+      send({ type: 'presence', playing: !!playing && !!title, title, artist, album, artwork, positionMs, durationMs });
+    } catch (_) {}
+  };
+  const tick = () => { read(); };
+  setInterval(tick, 5000);
+  document.addEventListener('play', tick, true);
+  document.addEventListener('pause', tick, true);
+  document.addEventListener('loadedmetadata', tick, true);
+  window.addEventListener('load', () => { tick(); setTimeout(tick, 1000); setTimeout(tick, 3000); });
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick, { once: true });
+  else tick();
+})();
+"#;
 const THEME_SCRIPT: &str = r#"
 (() => {
   let last = '';

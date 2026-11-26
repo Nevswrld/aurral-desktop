@@ -4,10 +4,28 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub server_url: String,
+    #[serde(default = "default_discord_enabled")]
+    pub discord_enabled: bool,
+    #[serde(default)]
+    pub discord_app_id: String,
+}
+
+fn default_discord_enabled() -> bool {
+    true
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            server_url: String::new(),
+            discord_enabled: true,
+            discord_app_id: String::new(),
+        }
+    }
 }
 
 impl AppConfig {
