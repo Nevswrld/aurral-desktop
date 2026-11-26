@@ -7,36 +7,53 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.1.0)"
+        description: "Release tag (e.g. v0.2.0)"
         required: true
         type: string
 
 permissions:
   contents: write
 
+env:
+  APP_NAME: Aurral Desktop
+  BIN_NAME: aurral-desktop
+  BUNDLE_ID: org.aurral.desktop
+
 jobs:
   build:
-    name: Build (${{ matrix.os }})
+    name: Build (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: windows
+          - name: windows-x64
+            os: windows
             runner: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: AurralDesktop-Setup-${{ github.event.inputs.tag || github.ref_name }}-windows-x64.exe
-          - os: linux
+          - name: linux-x64
+            os: linux
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-            artifact: AurralDesktop-${{ github.event.inputs.tag || github.ref_name }}-linux-x64.tar.gz
-          - os: macos
+          - name: macos-arm64
+            os: macos
             runner: macos-latest
             target: aarch64-apple-darwin
-            artifact: AurralDesktop-${{ github.event.inputs.tag || github.ref_name }}-macos-arm64.zip
+          - name: macos-x64
+            os: macos
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: meta
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,7 +64,11 @@ jobs:
         if: matrix.os == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf libxdo-dev libssl-dev \
+            desktop-file-utils fakeroot dpkg-dev \
+            flatpak flatpak-builder
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
@@ -59,13 +80,14 @@ jobs:
           choco install innosetup -y --no-progress
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { $iscc = "C:\Users\runneradmin\AppData\Local\Programs\Inno Setup 6\ISCC.exe" }
-          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
-          $version = $tag.TrimStart('v')
+          $tag = "${{ steps.meta.outputs.tag }}"
+          $version = "${{ steps.meta.outputs.version }}"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           New-Item -ItemType Directory -Force -Path target\release | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/aurral-desktop.exe" "target/release/aurral-desktop.exe" -Force
           $iss = Get-Content installer/aurral-desktop.iss -Raw
           $iss = $iss.Replace('#define MyAppVersion "0.1.0"', "#define MyAppVersion `"$version`"")
+          $iss = $iss.Replace('#define MyAppVersion "0.2.0"', "#define MyAppVersion `"$version`"")
           $iss = $iss.Replace('OutputBaseFilename=AurralDesktop-Setup-{#MyAppVersion}', "OutputBaseFilename=AurralDesktop-Setup-$tag-windows-x64")
           Set-Content installer/aurral-desktop.ci.iss $iss -Encoding utf8
           & $iscc "installer/aurral-desktop.ci.iss"
@@ -74,24 +96,97 @@ jobs:
 
       - name: Package Linux tarball
         if: matrix.os == 'linux'
+        shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${{ steps.meta.outputs.tag }}"
           OUT="AurralDesktop-${TAG}-linux-x64"
           mkdir -p "$OUT"
           cp "target/${{ matrix.target }}/release/aurral-desktop" "$OUT/"
-          cp README.md "$OUT/"
+          cp README.md LICENSE "$OUT/" 2>/dev/null || cp README.md "$OUT/"
           chmod +x "$OUT/aurral-desktop"
           tar -czf "${OUT}.tar.gz" "$OUT"
 
+      - name: Package Linux .deb
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          PKGDIR="pkg-deb"
+          mkdir -p "$PKGDIR/DEBIAN" "$PKGDIR/usr/bin" "$PKGDIR/usr/share/applications" "$PKGDIR/usr/share/icons/hicolor/512x512/apps"
+          cp "target/${{ matrix.target }}/release/aurral-desktop" "$PKGDIR/usr/bin/aurral-desktop"
+          chmod 0755 "$PKGDIR/usr/bin/aurral-desktop"
+          cp packaging/linux/org.aurral.Desktop.desktop "$PKGDIR/usr/share/applications/org.aurral.Desktop.desktop"
+          cp assets/aurral-icon-512.png "$PKGDIR/usr/share/icons/hicolor/512x512/apps/org.aurral.Desktop.png"
+          cat > "$PKGDIR/DEBIAN/control" <<EOF
+          Package: aurral-desktop
+          Version: ${VERSION}
+          Section: sound
+          Priority: optional
+          Architecture: amd64
+          Maintainer: Aurral Desktop <noreply@github.com>
+          Depends: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1
+          Description: Desktop client for Aurral music servers
+           A lightweight native WebView desktop client for Aurral with
+           Discord Rich Presence, system tray, and settings.
+          EOF
+          fakeroot dpkg-deb --build "$PKGDIR" "AurralDesktop-${TAG}-linux-x64.deb"
+
+      - name: Package Linux AppImage
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          APPDIR="AppDir"
+          rm -rf "$APPDIR"
+          mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps"
+          cp "target/${{ matrix.target }}/release/aurral-desktop" "$APPDIR/usr/bin/aurral-desktop"
+          chmod +x "$APPDIR/usr/bin/aurral-desktop"
+          cp packaging/linux/org.aurral.Desktop.desktop "$APPDIR/usr/share/applications/org.aurral.Desktop.desktop"
+          cp assets/aurral-icon-512.png "$APPDIR/usr/share/icons/hicolor/512x512/apps/org.aurral.Desktop.png"
+          cp assets/aurral-icon-512.png "$APPDIR/org.aurral.Desktop.png"
+          cp packaging/linux/org.aurral.Desktop.desktop "$APPDIR/org.aurral.Desktop.desktop"
+          ln -s usr/bin/aurral-desktop "$APPDIR/AppRun"
+          curl -fsSL -o linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSL -o appimagetool-x86_64.AppImage https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x linuxdeploy-x86_64.AppImage appimagetool-x86_64.AppImage
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export VERSION="${VERSION}"
+          ./linuxdeploy-x86_64.AppImage --appdir "$APPDIR" --executable "$APPDIR/usr/bin/aurral-desktop" --desktop-file "$APPDIR/usr/share/applications/org.aurral.Desktop.desktop" --icon-file "$APPDIR/usr/share/icons/hicolor/512x512/apps/org.aurral.Desktop.png" || true
+          ./appimagetool-x86_64.AppImage "$APPDIR" "AurralDesktop-${TAG}-linux-x64.AppImage"
+
+      - name: Package Linux Flatpak bundle
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.meta.outputs.tag }}"
+          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y --noninteractive flathub org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08
+          mkdir -p flatpak-build/src
+          cp "target/${{ matrix.target }}/release/aurral-desktop" flatpak-build/src/aurral-desktop
+          cp packaging/linux/org.aurral.Desktop.desktop flatpak-build/src/org.aurral.Desktop.desktop
+          cp assets/aurral-icon-512.png flatpak-build/src/aurral-icon-512.png
+          cp packaging/linux/org.aurral.Desktop.yml flatpak-build/org.aurral.Desktop.yml
+          pushd flatpak-build
+          sudo flatpak-builder --disable-rofiles-fuse --force-clean --repo=repo build-dir org.aurral.Desktop.yml
+          sudo flatpak build-bundle repo "../AurralDesktop-${TAG}-linux-x64.flatpak" org.aurral.Desktop
+          popd
+
       - name: Package macOS app
         if: matrix.os == 'macos'
+        shell: bash
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG="${{ steps.meta.outputs.tag }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          ARCH="${{ matrix.name }}"
+          ARCH="${ARCH#macos-}"
           APP="Aurral Desktop.app"
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp "target/${{ matrix.target }}/release/aurral-desktop" "$APP/Contents/MacOS/aurral-desktop"
           chmod +x "$APP/Contents/MacOS/aurral-desktop"
-          # Create icns
           mkdir -p icon.iconset
           sips -z 16 16 assets/aurral-icon-512.png --out icon.iconset/icon_16x16.png
           sips -z 32 32 assets/aurral-icon-512.png --out icon.iconset/icon_16x16@2x.png
@@ -111,8 +206,8 @@ jobs:
             <key>CFBundleName</key><string>Aurral Desktop</string>
             <key>CFBundleDisplayName</key><string>Aurral Desktop</string>
             <key>CFBundleIdentifier</key><string>org.aurral.desktop</string>
-            <key>CFBundleVersion</key><string>0.1.0</string>
-            <key>CFBundleShortVersionString</key><string>0.1.0</string>
+            <key>CFBundleVersion</key><string>0.0.0</string>
+            <key>CFBundleShortVersionString</key><string>0.0.0</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleExecutable</key><string>aurral-desktop</string>
             <key>CFBundleIconFile</key><string>aurral.icns</string>
@@ -120,17 +215,36 @@ jobs:
           </dict>
           </plist>
           PLIST
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${TAG#v}" "$APP/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${TAG#v}" "$APP/Contents/Info.plist"
-          ditto -c -k --sequesterRsrc --keepParent "$APP" "AurralDesktop-${TAG}-macos-arm64.zip"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "$APP/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "AurralDesktop-${TAG}-macos-${ARCH}.zip"
 
-      - name: Upload release asset
+      - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Aurral Desktop ${{ steps.meta.outputs.tag }}
+          body: |
+            ## What's new in ${{ steps.meta.outputs.tag }}
+
+            ### Added
+            - **Settings window** - New desktop settings window accessible from the system tray menu, with controls for desktop behavior and integrations.
+            - **Discord Rich Presence** - Shows your current Aurral track, artist, album, playback timing, and album artwork in Discord. Enabled by default with a preconfigured Aurral Desktop Discord Application ID.
+            - **Online artwork fallback** - If album artwork is local/private, Aurral Desktop looks up public cover art online so Discord can display it.
+            - **Close behavior setting** - Choose whether closing the window exits Aurral Desktop or minimizes it to the system tray.
+            - **Clear server setting** - Quickly clear the saved server URL and return to the connect screen.
+
+            ### Packaging
+            - Windows x64 installer (`.exe`)
+            - macOS Apple Silicon and Intel app bundles (`.zip`)
+            - Linux Debian package (`.deb`), AppImage (`.AppImage`), Flatpak bundle (`.flatpak`), and tarball (`.tar.gz`)
           files: |
-            dist/AurralDesktop-Setup-${{ github.event.inputs.tag || github.ref_name }}-windows-x64.exe
-            AurralDesktop-${{ github.event.inputs.tag || github.ref_name }}-linux-x64.tar.gz
-            AurralDesktop-${{ github.event.inputs.tag || github.ref_name }}-macos-arm64.zip
+            dist/AurralDesktop-Setup-${{ steps.meta.outputs.tag }}-windows-x64.exe
+            AurralDesktop-${{ steps.meta.outputs.tag }}-linux-x64.tar.gz
+            AurralDesktop-${{ steps.meta.outputs.tag }}-linux-x64.deb
+            AurralDesktop-${{ steps.meta.outputs.tag }}-linux-x64.AppImage
+            AurralDesktop-${{ steps.meta.outputs.tag }}-linux-x64.flatpak
+            AurralDesktop-${{ steps.meta.outputs.tag }}-macos-arm64.zip
+            AurralDesktop-${{ steps.meta.outputs.tag }}-macos-x64.zip
           fail_on_unmatched_files: false
           generate_release_notes: true

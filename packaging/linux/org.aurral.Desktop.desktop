@@ -1,0 +1,9 @@
+﻿[Desktop Entry]
+Type=Application
+Name=Aurral Desktop
+Comment=Desktop client for Aurral music servers
+Exec=aurral-desktop
+Icon=org.aurral.Desktop
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+StartupWMClass=aurral-desktop

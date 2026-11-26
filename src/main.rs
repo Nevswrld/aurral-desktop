@@ -1,27 +1,37 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod config;
 mod discord;
 
+const DEFAULT_DISCORD_APP_ID: &str = "1575620457032454224";
+
 use anyhow::Result;
-use config::{normalize_server_url, AppConfig};
+use config::{normalize_server_url, AppConfig, CloseBehavior};
+use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
-use tao::window::{Icon, WindowBuilder};
+use tao::window::{Icon, WindowBuilder, WindowId};
+use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
 use wry::WebViewBuilder;
 #[cfg(windows)]
 use tao::platform::windows::WindowExtWindows;
 #[cfg(windows)]
 use wry::WebViewBuilderExtWindows;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum UserEvent {
     Navigate(String),
     ConnectError(String),
     #[cfg(windows)]
     Theme([u8; 3]),
+    OpenSettings,
+    CloseSettings,
+    ShowMainWindow,
+    QuitApp,
+    ConfigChanged,
 }
 
 fn main() -> Result<()> {
@@ -52,11 +62,7 @@ fn main() -> Result<()> {
             .as_ref()
             .map(|c| c.discord_app_id.trim().to_string())
             .unwrap_or_default();
-        let app_id = if app_id.is_empty() {
-            std::env::var("AURRAL_DISCORD_APP_ID").unwrap_or_default()
-        } else {
-            app_id
-        };
+        let app_id = if app_id.is_empty() { std::env::var("AURRAL_DISCORD_APP_ID").unwrap_or_else(|_| DEFAULT_DISCORD_APP_ID.to_string()) } else { app_id };
         if enabled {
             discord::DiscordPresence::start(app_id)
         } else {
@@ -70,7 +76,10 @@ fn main() -> Result<()> {
     let mut builder = WebViewBuilder::new()
         .with_devtools(cfg!(debug_assertions))
         .with_autoplay(true)
-        .with_initialization_script(format!("{}\n{}", THEME_SCRIPT, PRESENCE_SCRIPT))
+        .with_initialization_script(format!(
+            "try{{{}}}catch(e){{try{{window.ipc.postMessage(JSON.stringify({{type:'presence_debug',initError:String(e),script:'theme'}}))}}catch(_){{}}}}\ntry{{{}}}catch(e){{try{{window.ipc.postMessage(JSON.stringify({{type:'presence_debug',initError:String(e),script:'presence'}}))}}catch(_){{}}}}",
+            THEME_SCRIPT, PRESENCE_SCRIPT
+        ))
         .with_ipc_handler(move |req| {
             let body = req.body().to_string();
             if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&body) {
@@ -117,7 +126,23 @@ fn main() -> Result<()> {
                             }
                         }
                     }
+                    Some("presence_debug") => {
+                        let path = std::env::temp_dir().join("aurral-desktop-discord.log");
+                        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                            use std::io::Write;
+                            let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                            let _ = writeln!(f, "[{ts}] presence_debug: {}", req.body().trim());
+                        }
+                    }
                     Some("presence") => {
+                        {
+                            let path = std::env::temp_dir().join("aurral-desktop-discord.log");
+                            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+                                use std::io::Write;
+                                let ts = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                let _ = writeln!(f, "[{ts}] ipc presence received");
+                            }
+                        }
                         if let Some(p) = handler_discord.as_ref() {
                             let playing = msg.get("playing").and_then(|v| v.as_bool()).unwrap_or(false);
                             let title = msg.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -169,16 +194,41 @@ fn main() -> Result<()> {
     let webview = Arc::new(Mutex::new(webview));
     #[cfg(windows)]
     let event_hwnd = hwnd;
+    let main_window_id = window.id();
 
-    event_loop.run(move |event, _, control_flow| {
+    let tray = build_tray(proxy.clone());
+    let mut discord_state = discord;
+
+    let mut settings_window: Option<tao::window::Window> = None;
+    let mut settings_webview: Option<wry::WebView> = None;
+    let mut settings_window_id: Option<WindowId> = None;
+
+    let main_window = window;
+    let config_for_loop = config.clone();
+    let webview_for_loop = webview.clone();
+    let proxy_for_loop = proxy.clone();
+    let allow_exit = Arc::new(AtomicBool::new(false));
+    let allow_exit_for_loop = allow_exit.clone();
+
+    event_loop.run(move |event, event_loop_target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::WindowEvent {
-                event: WindowEvent::CloseRequested,
-                ..
-            } => *control_flow = ControlFlow::Exit,
+            Event::WindowEvent { event: WindowEvent::CloseRequested, window_id, .. } => {
+                if window_id == main_window_id {
+                    let behavior = config_for_loop.lock().map(|c| c.close_behavior.clone()).unwrap_or(CloseBehavior::Close);
+                    if behavior == CloseBehavior::MinimizeToTray && tray.is_some() && !allow_exit_for_loop.load(Ordering::SeqCst) {
+                        main_window.set_visible(false);
+                    } else {
+                        *control_flow = ControlFlow::Exit;
+                    }
+                } else if Some(window_id) == settings_window_id {
+                    settings_webview.take();
+                    settings_window.take();
+                    settings_window_id = None;
+                }
+            }
             Event::UserEvent(UserEvent::Navigate(url)) => {
-                if let Ok(wv) = webview.lock() {
+                if let Ok(wv) = webview_for_loop.lock() {
                     if url.is_empty() {
                         let _ = wv.load_html(&connect_html(None));
                     } else {
@@ -187,11 +237,10 @@ fn main() -> Result<()> {
                 }
             }
             Event::UserEvent(UserEvent::ConnectError(msg)) => {
-                if let Ok(wv) = webview.lock() {
+                if let Ok(wv) = webview_for_loop.lock() {
                     let js = format!(
                         "window.__aurralSetError && window.__aurralSetError({});",
-                        serde_json::to_string(&msg)
-                            .unwrap_or_else(|_| "\"Server not found.\"".to_string())
+                        serde_json::to_string(&msg).unwrap_or_else(|_| "\"Server not found.\"".to_string())
                     );
                     let _ = wv.evaluate_script(&js);
                 }
@@ -200,10 +249,256 @@ fn main() -> Result<()> {
             Event::UserEvent(UserEvent::Theme(rgb)) => {
                 set_title_bar_color(event_hwnd, rgb);
             }
+            Event::UserEvent(UserEvent::OpenSettings) => {
+                if let Some(sw) = settings_window.as_ref() {
+                    sw.set_visible(true);
+                    let _ = sw.set_focus();
+                } else {
+                    let mut swb = WindowBuilder::new()
+                        .with_title("Aurral Settings")
+                        .with_inner_size(tao::dpi::LogicalSize::new(760.0, 720.0))
+                        .with_min_inner_size(tao::dpi::LogicalSize::new(560.0, 480.0))
+                        .with_resizable(true);
+                    if let Some(icon) = load_icon() { swb = swb.with_window_icon(Some(icon)); }
+                    if let Ok(sw) = swb.build(event_loop_target) {
+                        let sw_id = sw.id();
+                        let cfg_snap = config_for_loop.lock().map(|c| c.clone()).unwrap_or_default();
+                        let cfg_for_settings = config_for_loop.clone();
+                        let proxy_for_settings = proxy_for_loop.clone();
+                        let mut sb = WebViewBuilder::new()
+                            .with_devtools(cfg!(debug_assertions))
+                            .with_html(settings_html(&cfg_snap))
+                            .with_ipc_handler(move |req| {
+                                let body = req.body().to_string();
+                                if let Ok(msg) = serde_json::from_str::<serde_json::Value>(&body) {
+                                    match msg.get("type").and_then(|v| v.as_str()) {
+                                        Some("set_discord_enabled") => {
+                                            let enabled = msg.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
+                                            if let Ok(mut c) = cfg_for_settings.lock() { c.discord_enabled = enabled; let _ = c.save(); }
+                                            let _ = proxy_for_settings.send_event(UserEvent::ConfigChanged);
+                                        }
+                                        Some("set_close_behavior") => {
+                                            let b = msg.get("value").and_then(|v| v.as_str()).unwrap_or("close");
+                                            if let Ok(mut c) = cfg_for_settings.lock() {
+                                                c.close_behavior = if b == "minimize_to_tray" { CloseBehavior::MinimizeToTray } else { CloseBehavior::Close };
+                                                let _ = c.save();
+                                            }
+                                        }
+                                        Some("clear_server") => {
+                                            if let Ok(mut c) = cfg_for_settings.lock() { c.server_url.clear(); let _ = c.save(); }
+                                            let _ = proxy_for_settings.send_event(UserEvent::Navigate(String::new()));
+                                            let _ = proxy_for_settings.send_event(UserEvent::ShowMainWindow);
+                                            let _ = proxy_for_settings.send_event(UserEvent::CloseSettings);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            });
+                        #[cfg(windows)]
+                        { sb = sb.with_default_context_menus(false); }
+                        if let Ok(swv) = sb.build(&sw) {
+                            settings_window_id = Some(sw_id);
+                            settings_webview = Some(swv);
+                            settings_window = Some(sw);
+                        }
+                    }
+                }
+            }
+            Event::UserEvent(UserEvent::CloseSettings) => {
+                settings_webview.take();
+                settings_window.take();
+                settings_window_id = None;
+            }
+            Event::UserEvent(UserEvent::ShowMainWindow) => {
+                main_window.set_visible(true);
+                let _ = main_window.set_focus();
+            }
+            Event::UserEvent(UserEvent::QuitApp) => {
+                allow_exit_for_loop.store(true, Ordering::SeqCst);
+                *control_flow = ControlFlow::Exit;
+            }
+            Event::UserEvent(UserEvent::ConfigChanged) => {
+                let cfg_snap = config_for_loop.lock().map(|c| c.clone()).unwrap_or_default();
+                let app_id = if cfg_snap.discord_app_id.trim().is_empty() { std::env::var("AURRAL_DISCORD_APP_ID").unwrap_or_else(|_| DEFAULT_DISCORD_APP_ID.to_string()) } else { cfg_snap.discord_app_id.trim().to_string() };
+                if cfg_snap.discord_enabled {
+                    if discord_state.is_none() {
+                        discord_state = discord::DiscordPresence::start(app_id);
+                    }
+                } else {
+                    if let Some(d) = discord_state.as_ref() { d.clear(); }
+                    discord_state = None;
+                }
+            }
             _ => {}
         }
     });
 }
+
+
+
+fn settings_html(cfg: &AppConfig) -> String {
+    let discord_enabled = if cfg.discord_enabled { "checked" } else { "" };
+    let close_close = if cfg.close_behavior == CloseBehavior::Close { "selected" } else { "" };
+    let close_tray = if cfg.close_behavior == CloseBehavior::MinimizeToTray { "selected" } else { "" };
+    let html = r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Aurral Settings</title>
+<style>
+:root { color-scheme: dark; --bg:#050505; --panel:#0b0b0b; --panel2:#111; --border:rgba(255,255,255,.08); --muted:#a3a3a3; --text:#fff; --accent:#fff; --danger:#ef4444; }
+* { box-sizing: border-box; }
+body { margin:0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, sans-serif; background:var(--bg); color:var(--text); }
+.app { min-height:100vh; }
+.main { padding:32px 40px; max-width: 860px; margin: 0 auto; }
+h1 { margin:0 0 6px; font-size:28px; letter-spacing:-.02em; }
+.sub { color:var(--muted); margin:0 0 28px; font-size:14px; }
+.card { background:var(--panel); border:1px solid var(--border); border-radius:14px; overflow:hidden; margin-bottom:18px; }
+.row { display:flex; justify-content:space-between; gap:20px; padding:18px 20px; border-top:1px solid var(--border); align-items:center; }
+.row:first-child { border-top:0; }
+.label { font-weight:550; font-size:14px; }
+.desc { color:var(--muted); font-size:13px; margin-top:4px; line-height:1.45; }
+.ctrl { flex-shrink:0; }
+select, input[type=text] { background:var(--panel2); color:var(--text); border:1px solid rgba(255,255,255,.14); border-radius:8px; padding:10px 12px; font:inherit; min-width:240px; }
+select { appearance:none; -webkit-appearance:none; padding-right:36px; cursor:pointer; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23a3a3a3' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; background-size:12px; }
+select:focus, input[type=text]:focus { outline:none; border-color:rgba(255,255,255,.35); }
+.btn { background:#fff; color:#000; border:0; border-radius:8px; padding:10px 14px; font:inherit; font-weight:600; cursor:pointer; }
+.btn:hover { background:#e5e5e5; }
+.btn.danger { background:rgba(239,68,68,.12); color:#fca5a5; border:1px solid rgba(239,68,68,.25); }
+.btn.danger:hover { background:rgba(239,68,68,.2); }
+.switch { position:relative; width:44px; height:26px; display:inline-block; }
+.switch input { opacity:0; width:0; height:0; }
+.slider { position:absolute; inset:0; cursor:pointer; background:#333; border-radius:999px; transition:.2s; }
+.slider:before { content:""; position:absolute; height:20px; width:20px; left:3px; top:3px; background:#fff; border-radius:50%; transition:.2s; }
+.switch input:checked + .slider { background:#22c55e; }
+.switch input:checked + .slider:before { transform:translateX(18px); }
+.page { display:block; }
+.tip { display:inline-grid; place-items:center; width:16px; height:16px; border-radius:50%; border:1px solid rgba(255,255,255,.25); color:var(--muted); font-size:10px; margin-left:6px; cursor:help; vertical-align:middle; }
+.note { color:var(--muted); font-size:12px; margin-top:10px; line-height:1.5; }
+.saved { color:#86efac; font-size:12px; margin-left:10px; opacity:0; transition:opacity .2s; }
+.saved.show { opacity:1; }
+</style>
+</head>
+<body>
+<div class="app">
+  <main class="main">
+    <section id="general" class="page active">
+      <h1>General</h1>
+      <p class="sub">Configure desktop behavior and integrations.</p>
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="label">Discord Rich Presence <span class="tip" title="Shows your current Aurral track in Discord when Discord is running on this machine.">?</span></div>
+            <div class="desc">Show what you're listening to on Aurral in your Discord status.</div>
+          </div>
+          <div class="ctrl">
+            <label class="switch" title="Enable or disable Discord Rich Presence">
+              <input id="discordEnabled" type="checkbox" __DISCORD_ENABLED__>
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <div class="label">Close button behavior <span class="tip" title="Choose whether closing the window exits Aurral Desktop or keeps it running in the system tray.">?</span></div>
+            <div class="desc">Control what happens when you click the window close button.</div>
+          </div>
+          <div class="ctrl">
+            <select id="closeBehavior" title="Close button behavior">
+              <option value="close" __CLOSE_CLOSE__>Close app</option>
+              <option value="minimize_to_tray" __CLOSE_TRAY__>Minimize to tray</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="row">
+          <div>
+            <div class="label">Server connection <span class="tip" title="Clears the saved Aurral server URL and returns you to the connect screen.">?</span></div>
+            <div class="desc">Clear the saved server and return to the connect screen.</div>
+          </div>
+          <div class="ctrl">
+            <button id="clearServer" class="btn danger" title="Clear saved server URL and go back to connect screen">Clear server</button>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</div>
+<script>
+(function(){
+  const ipc = (msg) => {
+    try {
+      const s = JSON.stringify(msg);
+      if (window.ipc && window.ipc.postMessage) window.ipc.postMessage(s);
+      else if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) window.chrome.webview.postMessage(s);
+    } catch (_) {}
+  };
+  const de = document.getElementById('discordEnabled');
+  if (de) de.addEventListener('change', e => ipc({type:'set_discord_enabled', enabled: e.target.checked}));
+  const cb = document.getElementById('closeBehavior');
+  if (cb) cb.addEventListener('change', e => ipc({type:'set_close_behavior', value: e.target.value}));
+  const cs = document.getElementById('clearServer');
+  if (cs) cs.addEventListener('click', () => { ipc({type:'clear_server'}); });
+})();
+</script>
+</body>
+</html>"##;
+    html.replace("__DISCORD_ENABLED__", discord_enabled)
+        .replace("__CLOSE_CLOSE__", close_close)
+        .replace("__CLOSE_TRAY__", close_tray)
+}
+
+fn tray_icon_from_app() -> Option<tray_icon::Icon> {
+    let bytes = include_bytes!("../assets/aurral-icon-512.png");
+    let img = image::load_from_memory(bytes).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    tray_icon::Icon::from_rgba(img.into_raw(), width, height).ok()
+}
+
+fn build_tray(proxy: tao::event_loop::EventLoopProxy<UserEvent>) -> Option<TrayIcon> {
+    let menu = Menu::new();
+    let show = MenuItem::new("Show Aurral", true, None);
+    let settings = MenuItem::new("Settings...", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    let _ = menu.append(&show);
+    let _ = menu.append(&settings);
+    let _ = menu.append(&PredefinedMenuItem::separator());
+    let _ = menu.append(&quit);
+
+    let show_id = show.id().clone();
+    let settings_id = settings.id().clone();
+    let quit_id = quit.id().clone();
+
+    let p = proxy.clone();
+    MenuEvent::set_event_handler(Some(std::sync::Arc::new(move |event: MenuEvent| {
+        if event.id == show_id {
+            let _ = p.send_event(UserEvent::ShowMainWindow);
+        } else if event.id == settings_id {
+            let _ = p.send_event(UserEvent::OpenSettings);
+        } else if event.id == quit_id {
+            let _ = p.send_event(UserEvent::QuitApp);
+        }
+    })));
+
+    let p2 = proxy.clone();
+    TrayIconEvent::set_event_handler(Some(move |event: TrayIconEvent| {
+        if matches!(event, TrayIconEvent::Click { button: tray_icon::MouseButton::Left, .. } | TrayIconEvent::DoubleClick { button: tray_icon::MouseButton::Left, .. }) {
+            let _ = p2.send_event(UserEvent::ShowMainWindow);
+        }
+    }));
+
+    let icon = tray_icon_from_app()?;
+    TrayIconBuilder::new()
+        .with_menu(Box::new(menu))
+        .with_tooltip("Aurral Desktop")
+        .with_icon(icon)
+        .build()
+        .ok()
+}
+
 
 fn verify_aurral_server(url: &str) -> std::result::Result<(), String> {
     let parsed = url::Url::parse(url).map_err(|_| "Enter a valid server URL.".to_string())?;
@@ -425,11 +720,24 @@ const PRESENCE_SCRIPT: &str = r#"
       const md = ms && ms.metadata;
       const audio = document.querySelector('audio,video');
       const playing = ms ? ms.playbackState === 'playing' : (audio ? !audio.paused : false);
-      const title = md?.title || '';
-      const artist = md?.artist || '';
-      const album = md?.album || '';
+      let title = md?.title || '';
+      let artist = md?.artist || '';
+      let album = md?.album || '';
+      if (!title) {
+        const t = document.querySelector('[data-testid*="title" i],[class*="track-title" i],[class*="song-title" i],[class*="now-playing" i] [class*="title" i]');
+        if (t && t.textContent) title = t.textContent.trim();
+      }
+      if (!artist) {
+        const a = document.querySelector('[data-testid*="artist" i],[class*="track-artist" i],[class*="song-artist" i],[class*="now-playing" i] [class*="artist" i]');
+        if (a && a.textContent) artist = a.textContent.trim();
+      }
       let artwork = '';
       if (md?.artwork && md.artwork.length) artwork = md.artwork[md.artwork.length - 1]?.src || md.artwork[0]?.src || '';
+      if (!artwork) {
+        const img = document.querySelector('[class*="now-playing" i] img,[class*="player" i] img[src*="cover" i],[class*="player" i] img[src*="art" i],[data-testid*="artwork" i] img,img[class*="album" i],img[class*="cover" i]');
+        if (img) artwork = img.currentSrc || img.src || '';
+      }
+      if (artwork && artwork.startsWith('/')) artwork = location.origin + artwork;
       const durationMs = audio && isFinite(audio.duration) ? Math.max(0, Math.round(audio.duration * 1000)) : 0;
       const positionMs = audio && isFinite(audio.currentTime) ? Math.max(0, Math.round(audio.currentTime * 1000)) : 0;
       send({ type: 'presence', playing: !!playing && !!title, title, artist, album, artwork, positionMs, durationMs });

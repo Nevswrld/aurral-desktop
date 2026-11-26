@@ -1,37 +1,44 @@
-# Aurral Desktop
+﻿# Aurral Desktop
 
 A lightweight desktop client for [Aurral](https://github.com/lklynet/aurral), built in Rust.
 
-This app is a thin native WebView wrapper around your Aurral server's web frontend, so the desktop experience looks and behaves like the Aurral web app. It supports Windows, Linux, and macOS.
+This app is a thin native WebView wrapper around your Aurral server's web frontend, so the desktop experience looks and behaves like the Aurral web app.
 
 ![Aurral Desktop screenshot](assets/screenshot.png)
 
 ## Features
 
-- Native desktop window for Aurral
-- Connect to any Aurral server by URL
-- Saves your server URL locally for next launch
-- Uses the real Aurral web frontend for login, browsing, and playback
-- Discord Rich Presence showing your current Aurral track
-- Windows installer, Linux tarball, and macOS app bundle via GitHub Releases
+- **Native desktop app** for Aurral on Windows, Linux, and macOS
+- **Web frontend parity** - uses the real Aurral web frontend for login, browsing, and playback
+- **Server connect flow** - connect to any Aurral server by URL, with server validation and saved config
+- **Settings window** - tray menu settings for desktop behavior and integrations
+- **Discord Rich Presence** - shows your current track, artist, album, and album artwork in Discord (enabled by default)
+- **System tray** - show/hide window, open settings, or quit
+- **Close behavior** - choose whether closing the window exits the app or minimizes to tray
 
 ## Download
 
-Prebuilt installers/packages are available on the [GitHub Releases](https://github.com/Nevswrld/aurral-desktop/releases) page:
+Prebuilt packages are available on the [GitHub Releases](https://github.com/Nevswrld/aurral-desktop/releases) page.
 
-- **Windows**: `AurralDesktop-Setup-*.exe` (Inno Setup installer)
-- **Linux**: `AurralDesktop-*-linux-x64.tar.gz`
-- **macOS**: `AurralDesktop-*-macos-arm64.zip` (Apple Silicon `.app` bundle)
+| Platform | Download | Notes |
+| --- | --- | --- |
+| Windows (x64) | `AurralDesktop-Setup-v*-windows-x64.exe` | Inno Setup installer |
+| macOS (Apple Silicon) | `AurralDesktop-v*-macos-arm64.zip` | `.app` bundle |
+| macOS (Intel) | `AurralDesktop-v*-macos-x64.zip` | `.app` bundle |
+| Linux (Debian/Ubuntu) | `AurralDesktop-v*-linux-x64.deb` | Debian package |
+| Linux (AppImage) | `AurralDesktop-v*-linux-x64.AppImage` | Portable AppImage |
+| Linux (Flatpak bundle) | `AurralDesktop-v*-linux-x64.flatpak` | Flatpak single-file bundle |
+| Linux (tarball) | `AurralDesktop-v*-linux-x64.tar.gz` | Portable tarball |
 
 ## Requirements
 
-- A running Aurral server
+- A running [Aurral](https://github.com/lklynet/aurral) server
 - **Windows**: Windows 10/11 with Microsoft Edge WebView2 Runtime
-- **Linux**: WebKitGTK and GTK3 (e.g. `libwebkit2gtk-4.1-dev`, `libgtk-3-dev` on Ubuntu/Debian)
-- **macOS**: macOS 11+ (Apple Silicon build provided by release workflow)
-- Rust stable toolchain for building from source
+- **Linux**: WebKitGTK/GTK3 runtime. For the tarball on Debian/Ubuntu, install: `libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1`
+- **macOS**: macOS 11+
+- **Discord Rich Presence**: Discord desktop app running on the same machine
 
-## Build
+## Build from source
 
 ```bash
 cargo build --release
@@ -43,10 +50,10 @@ The executable will be created at:
 target/release/aurral-desktop(.exe on Windows)
 ```
 
-## Run
+### Linux build dependencies (Debian/Ubuntu)
 
 ```bash
-cargo run --release
+sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libssl-dev
 ```
 
 ## Usage
@@ -58,31 +65,44 @@ cargo run --release
 
 The selected server URL is stored locally in your user config directory.
 
+## Settings
+
+Open **Settings** from the system tray icon menu.
+
+- **Discord Rich Presence** - toggle showing your current track in Discord.
+- **Close button behavior** - close the app or minimize to tray.
+- **Clear server** - clear the saved server URL and return to the connect screen.
+
 ## Discord Rich Presence
 
-The desktop app can show your current Aurral track in Discord. To enable it, set a Discord Application ID in your config file:
+Discord Rich Presence is enabled by default and preconfigured with the Aurral Desktop Discord Application ID. It shows the current track, artist, album, playback timing, and album artwork in Discord.
+
+If your Aurral server provides a public artwork URL, that artwork is used. If the artwork URL is local/private, Aurral Desktop falls back to looking up public cover art online so Discord can display it.
+
+You can override the Discord Application ID via `discord_app_id` in config or the `AURRAL_DISCORD_APP_ID` environment variable.
+
+Config locations:
 
 - **Windows**: `%APPDATA%\aurral\AurralDesktop\config\config.json`
 - **Linux**: `~/.config/AurralDesktop/config.json`
 - **macOS**: `~/Library/Application Support/org.aurral.AurralDesktop/config.json`
 
-Add `discord_app_id` (from the [Discord Developer Portal](https://discord.com/developers/applications)):
+Example:
 
 ```json
 {
   "server_url": "http://localhost:3001",
   "discord_enabled": true,
-  "discord_app_id": "YOUR_DISCORD_APPLICATION_ID"
+  "discord_app_id": "1575620457032454224",
+  "close_behavior": "close"
 }
 ```
 
-You can also set the `AURRAL_DISCORD_APP_ID` environment variable. Discord must be running on the same machine.
-
 ## Notes
 
-- The desktop app renders the Aurral web frontend inside a native WebView for visual parity with the web app.
 - Authentication and playback are handled by Aurral's web frontend/server.
-- To change servers, clear the saved config in your user config directory or reinstall with a fresh config.
+- The desktop app renders the Aurral web frontend inside a native WebView for visual parity.
+- To change servers, use **Settings > Clear server**.
 
 ## Aurral
 

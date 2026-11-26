@@ -1,6 +1,6 @@
 ﻿; Aurral Desktop Inno Setup installer
 #define MyAppName "Aurral Desktop"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "Aurral Desktop"
 #define MyAppExeName "aurral-desktop.exe"
 

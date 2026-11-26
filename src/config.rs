@@ -4,6 +4,19 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseBehavior {
+    Close,
+    MinimizeToTray,
+}
+
+impl Default for CloseBehavior {
+    fn default() -> Self {
+        Self::Close
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
@@ -12,6 +25,8 @@ pub struct AppConfig {
     pub discord_enabled: bool,
     #[serde(default)]
     pub discord_app_id: String,
+    #[serde(default)]
+    pub close_behavior: CloseBehavior,
 }
 
 fn default_discord_enabled() -> bool {
@@ -24,6 +39,7 @@ impl Default for AppConfig {
             server_url: String::new(),
             discord_enabled: true,
             discord_app_id: String::new(),
+            close_behavior: CloseBehavior::default(),
         }
     }
 }
