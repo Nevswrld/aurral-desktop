@@ -4,6 +4,8 @@ A lightweight desktop client for [Aurral](https://github.com/lklynet/aurral), bu
 
 This app is a thin native WebView wrapper around your Aurral server's web frontend, so the desktop experience looks and behaves like the Aurral web app. It supports Windows, Linux, and macOS.
 
+![Aurral Desktop screenshot](assets/screenshot.png)
+
 ## Features
 
 - Native desktop window for Aurral
