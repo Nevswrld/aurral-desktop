@@ -1,4 +1,4 @@
-/target
+﻿/target
 *.log
 .env
 .env.*
@@ -8,3 +8,4 @@ aurral-desktop.config.json
 *.pdb
 Thumbs.db
 .DS_Store
+/dist
