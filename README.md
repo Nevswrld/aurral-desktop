@@ -67,11 +67,15 @@ sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicat
 3. Click **Connect**.
 4. Sign in and use Aurral as you would in the browser.
 
+![Connect to Aurral server](assets/connect.png)
+
 The selected server URL is stored locally in your user config directory.
 
 ## Settings
 
 Open **Settings** from the system tray icon menu.
+
+![Aurral Desktop settings](assets/settings.png)
 
 - **Discord Rich Presence** - toggle showing your current track in Discord.
 - **Close button behavior** - close the app or minimize to tray.
