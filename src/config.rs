@@ -17,6 +17,14 @@ impl Default for CloseBehavior {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct WindowState {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
@@ -27,6 +35,10 @@ pub struct AppConfig {
     pub discord_app_id: String,
     #[serde(default)]
     pub close_behavior: CloseBehavior,
+    #[serde(default)]
+    pub main_window: Option<WindowState>,
+    #[serde(default)]
+    pub settings_window: Option<WindowState>,
 }
 
 fn default_discord_enabled() -> bool {
@@ -40,6 +52,8 @@ impl Default for AppConfig {
             discord_enabled: true,
             discord_app_id: String::new(),
             close_behavior: CloseBehavior::default(),
+            main_window: None,
+            settings_window: None,
         }
     }
 }

@@ -6,7 +6,7 @@ mod discord;
 const DEFAULT_DISCORD_APP_ID: &str = "1575620457032454224";
 
 use anyhow::Result;
-use config::{normalize_server_url, AppConfig, CloseBehavior};
+use config::{normalize_server_url, AppConfig, CloseBehavior, WindowState};
 use muda::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -38,11 +38,20 @@ fn main() -> Result<()> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
+    let loaded_config = AppConfig::load();
+    let initial_url = loaded_config.normalized_server_url();
+    let saved_main_window = loaded_config.main_window.clone();
+
     let window_icon = load_icon();
     let mut window_builder = WindowBuilder::new()
         .with_title("Aurral Desktop")
-        .with_inner_size(tao::dpi::LogicalSize::new(1280.0, 800.0))
         .with_min_inner_size(tao::dpi::LogicalSize::new(960.0, 640.0));
+    window_builder = apply_window_state(
+        window_builder,
+        saved_main_window.as_ref(),
+        tao::dpi::LogicalSize::new(1280.0, 800.0),
+        &event_loop,
+    );
     if let Some(icon) = window_icon {
         window_builder = window_builder.with_window_icon(Some(icon));
     }
@@ -52,8 +61,7 @@ fn main() -> Result<()> {
     #[cfg(windows)]
     set_title_bar_color(hwnd, [5, 5, 5]);
 
-    let config = Arc::new(Mutex::new(AppConfig::load()));
-    let initial_url = config.lock().ok().and_then(|c| c.normalized_server_url());
+    let config = Arc::new(Mutex::new(loaded_config));
 
     let discord = {
         let c = config.lock().ok();
@@ -215,16 +223,39 @@ fn main() -> Result<()> {
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, window_id, .. } => {
                 if window_id == main_window_id {
+                    if let Some(s) = capture_window_state(&main_window) {
+                        if let Ok(mut c) = config_for_loop.lock() { c.main_window = Some(s); let _ = c.save(); }
+                    }
                     let behavior = config_for_loop.lock().map(|c| c.close_behavior.clone()).unwrap_or(CloseBehavior::Close);
                     if behavior == CloseBehavior::MinimizeToTray && tray.is_some() && !allow_exit_for_loop.load(Ordering::SeqCst) {
                         main_window.set_visible(false);
                     } else {
+                        allow_exit_for_loop.store(true, Ordering::SeqCst);
                         *control_flow = ControlFlow::Exit;
                     }
                 } else if Some(window_id) == settings_window_id {
+                    if let Some(sw) = settings_window.as_ref() {
+                        if let Some(s) = capture_window_state(sw) {
+                            if let Ok(mut c) = config_for_loop.lock() { c.settings_window = Some(s); let _ = c.save(); }
+                        }
+                    }
                     settings_webview.take();
                     settings_window.take();
                     settings_window_id = None;
+                }
+            }
+            Event::WindowEvent { event: WindowEvent::Moved(_), window_id, .. }
+            | Event::WindowEvent { event: WindowEvent::Resized(_), window_id, .. } => {
+                if window_id == main_window_id {
+                    if let Some(s) = capture_window_state(&main_window) {
+                        if let Ok(mut c) = config_for_loop.lock() { c.main_window = Some(s); let _ = c.save(); }
+                    }
+                } else if Some(window_id) == settings_window_id {
+                    if let Some(sw) = settings_window.as_ref() {
+                        if let Some(s) = capture_window_state(sw) {
+                            if let Ok(mut c) = config_for_loop.lock() { c.settings_window = Some(s); let _ = c.save(); }
+                        }
+                    }
                 }
             }
             Event::UserEvent(UserEvent::Navigate(url)) => {
@@ -254,15 +285,20 @@ fn main() -> Result<()> {
                     sw.set_visible(true);
                     let _ = sw.set_focus();
                 } else {
+                    let cfg_snap = config_for_loop.lock().map(|c| c.clone()).unwrap_or_default();
                     let mut swb = WindowBuilder::new()
                         .with_title("Aurral Settings")
-                        .with_inner_size(tao::dpi::LogicalSize::new(760.0, 720.0))
                         .with_min_inner_size(tao::dpi::LogicalSize::new(560.0, 480.0))
                         .with_resizable(true);
+                    swb = apply_window_state(
+                        swb,
+                        cfg_snap.settings_window.as_ref(),
+                        tao::dpi::LogicalSize::new(760.0, 720.0),
+                        event_loop_target,
+                    );
                     if let Some(icon) = load_icon() { swb = swb.with_window_icon(Some(icon)); }
                     if let Ok(sw) = swb.build(event_loop_target) {
                         let sw_id = sw.id();
-                        let cfg_snap = config_for_loop.lock().map(|c| c.clone()).unwrap_or_default();
                         let cfg_for_settings = config_for_loop.clone();
                         let proxy_for_settings = proxy_for_loop.clone();
                         let mut sb = WebViewBuilder::new()
@@ -314,6 +350,14 @@ fn main() -> Result<()> {
                 let _ = main_window.set_focus();
             }
             Event::UserEvent(UserEvent::QuitApp) => {
+                if let Some(s) = capture_window_state(&main_window) {
+                    if let Ok(mut c) = config_for_loop.lock() { c.main_window = Some(s); let _ = c.save(); }
+                }
+                if let Some(sw) = settings_window.as_ref() {
+                    if let Some(s) = capture_window_state(sw) {
+                        if let Ok(mut c) = config_for_loop.lock() { c.settings_window = Some(s); let _ = c.save(); }
+                    }
+                }
                 allow_exit_for_loop.store(true, Ordering::SeqCst);
                 *control_flow = ControlFlow::Exit;
             }
@@ -335,6 +379,68 @@ fn main() -> Result<()> {
 }
 
 
+
+fn window_state_is_visible(state: &WindowState, target: &tao::event_loop::EventLoopWindowTarget<UserEvent>) -> bool {
+    let sx = state.x as i64;
+    let sy = state.y as i64;
+    let sw = state.width.max(200) as i64;
+    let sh = state.height.max(200) as i64;
+    for m in target.available_monitors() {
+        let p = m.position();
+        let s = m.size();
+        let mx = p.x as i64;
+        let my = p.y as i64;
+        let mw = s.width as i64;
+        let mh = s.height as i64;
+        let intersects = sx < mx + mw && sx + sw > mx && sy < my + mh && sy + sh > my;
+        if intersects {
+            return true;
+        }
+    }
+    false
+}
+
+fn centered_position(target: &tao::event_loop::EventLoopWindowTarget<UserEvent>, width: u32, height: u32) -> Option<tao::dpi::PhysicalPosition<i32>> {
+    let monitor = target.primary_monitor().or_else(|| target.available_monitors().next())?;
+    let mp = monitor.position();
+    let ms = monitor.size();
+    let x = mp.x + ((ms.width as i32 - width as i32) / 2).max(0);
+    let y = mp.y + ((ms.height as i32 - height as i32) / 2).max(0);
+    Some(tao::dpi::PhysicalPosition::new(x, y))
+}
+
+fn capture_window_state(window: &tao::window::Window) -> Option<WindowState> {
+    let pos = window.outer_position().ok()?;
+    let size = window.inner_size();
+    if size.width < 200 || size.height < 200 || pos.x < -10_000 || pos.y < -10_000 {
+        return None;
+    }
+    Some(WindowState { x: pos.x, y: pos.y, width: size.width, height: size.height })
+}
+
+fn apply_window_state(
+    mut builder: tao::window::WindowBuilder,
+    saved: Option<&WindowState>,
+    default_size: tao::dpi::LogicalSize<f64>,
+    target: &tao::event_loop::EventLoopWindowTarget<UserEvent>,
+) -> tao::window::WindowBuilder {
+    if let Some(state) = saved {
+        if window_state_is_visible(state, target) {
+            builder = builder
+                .with_position(tao::dpi::PhysicalPosition::new(state.x, state.y))
+                .with_inner_size(tao::dpi::PhysicalSize::new(state.width, state.height));
+            return builder;
+        }
+    }
+    let scale = target.primary_monitor().map(|m| m.scale_factor()).unwrap_or(1.0);
+    let w = (default_size.width * scale).round() as u32;
+    let h = (default_size.height * scale).round() as u32;
+    builder = builder.with_inner_size(default_size);
+    if let Some(pos) = centered_position(target, w, h) {
+        builder = builder.with_position(pos);
+    }
+    builder
+}
 
 fn settings_html(cfg: &AppConfig) -> String {
     let discord_enabled = if cfg.discord_enabled { "checked" } else { "" };
