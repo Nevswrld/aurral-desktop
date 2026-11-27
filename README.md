@@ -1,4 +1,6 @@
-﻿# Aurral Desktop
+﻿![Aurral Desktop header](assets/header.png)
+
+# Aurral Desktop
 
 A lightweight desktop client for [Aurral](https://github.com/lklynet/aurral), built in Rust.
 
@@ -15,6 +17,12 @@ This app is a thin native WebView wrapper around your Aurral server's web fronte
 - **Discord Rich Presence** - shows your current track, artist, album, and album artwork in Discord (enabled by default)
 - **System tray** - show/hide window, open settings, or quit
 - **Close behavior** - choose whether closing the window exits the app or minimizes to tray
+
+## Screenshots
+
+| Trending | Recommended | Playlists |
+| --- | --- | --- |
+| ![Trending](assets/trending.png) | ![Recommended](assets/recommended.png) | ![Playlists](assets/playlists.png) |
 
 ## Download
 
