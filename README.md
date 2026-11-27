@@ -20,9 +20,14 @@ This app is a thin native WebView wrapper around your Aurral server's web fronte
 
 ## Screenshots
 
-| Trending | Recommended | Playlists |
-| --- | --- | --- |
-| ![Trending](assets/trending.png) | ![Recommended](assets/recommended.png) | ![Playlists](assets/playlists.png) |
+### Trending
+![Trending view in Aurral Desktop](assets/trending.png)
+
+### Recommended
+![Recommended view in Aurral Desktop](assets/recommended.png)
+
+### Playlists
+![Playlists view in Aurral Desktop](assets/playlists.png)
 
 ## Download
 
