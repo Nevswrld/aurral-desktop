@@ -18,20 +18,11 @@ This app is a thin native WebView wrapper around your Aurral server's web fronte
 - **System tray** - show/hide window, open settings, or quit
 - **Close behavior** - choose whether closing the window exits the app or minimizes to tray
 
-## Screenshots
-
-### Trending
-![Trending view in Aurral Desktop](assets/trending.png)
-
-### Recommended
-![Recommended view in Aurral Desktop](assets/recommended.png)
-
-### Playlists
-![Playlists view in Aurral Desktop](assets/playlists.png)
-
 ## Download
 
 Prebuilt packages are available on the [GitHub Releases](https://github.com/Nevswrld/aurral-desktop/releases) page.
+
+![Playlists view in Aurral Desktop](assets/playlists.png)
 
 | Platform | Download | Notes |
 | --- | --- | --- |
