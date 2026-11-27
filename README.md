@@ -77,6 +77,8 @@ Open **Settings** from the system tray icon menu.
 
 Discord Rich Presence is enabled by default and preconfigured with the Aurral Desktop Discord Application ID. It shows the current track, artist, album, playback timing, and album artwork in Discord.
 
+![Discord Rich Presence example](assets/discord-activity.png)
+
 If your Aurral server provides a public artwork URL, that artwork is used. If the artwork URL is local/private, Aurral Desktop falls back to looking up public cover art online so Discord can display it.
 
 You can override the Discord Application ID via `discord_app_id` in config or the `AURRAL_DISCORD_APP_ID` environment variable.
